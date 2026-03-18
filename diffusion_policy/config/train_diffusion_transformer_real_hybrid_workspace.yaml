@@ -47,6 +47,7 @@ policy:
 
   n_layer: 8
   n_cond_layers: 0  # >0: use transformer encoder for cond, otherwise use MLP
+  attention_residual_scale: 0.25  # Kimi Attention Residuals-style learnable bypass
   n_head: 4
   n_emb: 256
   p_drop_emb: 0.0
