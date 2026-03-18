@@ -22,7 +22,10 @@ class TransformerForDiffusion(ModuleAttrMixin):
             causal_attn: bool=False,
             time_as_cond: bool=True,
             obs_as_cond: bool=False,
-            n_cond_layers: int = 0
+            n_cond_layers: int = 0,
+            # inspired by "Attention Residuals" style residual bypass
+            # (Kimi team): keep a learnable shortcut around full attention stacks.
+            attention_residual_scale: float = 0.25
         ) -> None:
         super().__init__()
 
@@ -48,6 +51,13 @@ class TransformerForDiffusion(ModuleAttrMixin):
         # cond encoder
         self.time_emb = SinusoidalPosEmb(n_emb)
         self.cond_obs_emb = None
+        self.attention_residual_scale = attention_residual_scale
+        self.encoder_residual_gate = nn.Parameter(
+            torch.tensor(float(attention_residual_scale))
+        )
+        self.decoder_residual_gate = nn.Parameter(
+            torch.tensor(float(attention_residual_scale))
+        )
         
         if obs_as_cond:
             self.cond_obs_emb = nn.Linear(cond_dim, n_emb)
@@ -217,6 +227,12 @@ class TransformerForDiffusion(ModuleAttrMixin):
                 elif pn.startswith("bias"):
                     # MultiheadAttention bias starts with "bias"
                     no_decay.add(fpn)
+                elif pn.endswith("scale"):
+                    # scalar residual gates should not be decayed
+                    no_decay.add(fpn)
+                elif pn.endswith("gate"):
+                    # attention residual gates should not be decayed
+                    no_decay.add(fpn)
                 elif pn.endswith("weight") and isinstance(m, whitelist_weight_modules):
                     # weights of whitelist modules will be weight decayed
                     decay.add(fpn)
@@ -301,7 +317,9 @@ class TransformerForDiffusion(ModuleAttrMixin):
             ]  # each position maps to a (learnable) vector
             x = self.drop(token_embeddings + position_embeddings)
             # (B,T+1,n_emb)
+            residual_input = x
             x = self.encoder(src=x, mask=self.mask)
+            x = x + self.encoder_residual_gate * residual_input
             # (B,T+1,n_emb)
             x = x[:,1:,:]
             # (B,T,n_emb)
@@ -317,7 +335,9 @@ class TransformerForDiffusion(ModuleAttrMixin):
                 :, :tc, :
             ]  # each position maps to a (learnable) vector
             x = self.drop(cond_embeddings + position_embeddings)
+            residual_memory_input = x
             x = self.encoder(x)
+            x = x + self.encoder_residual_gate * residual_memory_input
             memory = x
             # (B,T_cond,n_emb)
             
@@ -329,12 +349,14 @@ class TransformerForDiffusion(ModuleAttrMixin):
             ]  # each position maps to a (learnable) vector
             x = self.drop(token_embeddings + position_embeddings)
             # (B,T,n_emb)
+            residual_decoder_input = x
             x = self.decoder(
                 tgt=x,
                 memory=memory,
                 tgt_mask=self.mask,
                 memory_mask=self.memory_mask
             )
+            x = x + self.decoder_residual_gate * residual_decoder_input
             # (B,T,n_emb)
         
         # head
@@ -415,4 +437,3 @@ def test():
     timestep = torch.tensor(0)
     sample = torch.zeros((4,8,16))
     out = transformer(sample, timestep)
-
