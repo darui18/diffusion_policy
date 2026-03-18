@@ -230,6 +230,9 @@ class TransformerForDiffusion(ModuleAttrMixin):
                 elif pn.endswith("scale"):
                     # scalar residual gates should not be decayed
                     no_decay.add(fpn)
+                elif pn.endswith("gate"):
+                    # attention residual gates should not be decayed
+                    no_decay.add(fpn)
                 elif pn.endswith("weight") and isinstance(m, whitelist_weight_modules):
                     # weights of whitelist modules will be weight decayed
                     decay.add(fpn)
